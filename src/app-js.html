@@ -1,0 +1,516 @@
+<script>
+/* ================= サーバー呼び出し ================= */
+
+const gas = (fn, ...args) => new Promise((resolve, reject) =>
+  google.script.run
+    .withSuccessHandler(resolve)
+    .withFailureHandler(reject)[fn](...args));
+
+/* ================= 状態 ================= */
+
+const DAY_START = 8;   // 8:00
+const DAY_END = 20;    // 20:00
+const SLOT_MIN = 30;
+const DAYS = 5;        // 月〜金
+const YOUBI = ['日', '月', '火', '水', '木', '金', '土'];
+
+const state = {
+  userEmail: '',
+  members: [],            // [{email, label}]
+  selectedMembers: [],    // 表示中メンバーのemail
+  weekStart: null,        // 月曜0:00 (Date)
+  myEvents: [],
+  freeBusy: {},           // {email: {status, busy: [...]}}
+  cart: [],               // [{start: iso, end: iso}]
+  groups: [],
+  lastGroupId: null
+};
+
+/* ================= ユーティリティ ================= */
+
+function mondayOf(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+  return x;
+}
+function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+function addMin(d, n) { return new Date(d.getTime() + n * 60000); }
+function pad2(n) { return String(n).padStart(2, '0'); }
+function hhmm(d) { return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+function mdw(d) { return (d.getMonth() + 1) + '/' + d.getDate() + '(' + YOUBI[d.getDay()] + ')'; }
+function slotLabel(s) {
+  const st = new Date(s.start), en = new Date(s.end);
+  return mdw(st) + ' ' + hhmm(st) + '〜' + hhmm(en);
+}
+function overlaps(aS, aE, bS, bE) { return aS < bE && bS < aE; }
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+let toastTimer = null;
+function showToast(msg, isError) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.toggle('error', !!isError);
+  el.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add('hidden'), isError ? 12000 : 4000);
+}
+
+/* ================= 初期化 ================= */
+
+async function init() {
+  try {
+    const data = await gas('getInitData');
+    state.userEmail = data.userEmail;
+    state.members = data.members;
+    state.selectedMembers = data.members.map(m => m.email);
+    state.weekStart = mondayOf(new Date());
+    document.getElementById('userEmail').textContent = data.userEmail;
+    bindEvents();
+    await refresh();
+  } catch (e) {
+    showToast('初期化エラー: ' + (e.message || e), true);
+  }
+}
+
+function bindEvents() {
+  document.getElementById('prevWeek').onclick = () => moveWeek(-7);
+  document.getElementById('nextWeek').onclick = () => moveWeek(7);
+  document.getElementById('todayBtn').onclick = () => { state.weekStart = mondayOf(new Date()); refresh(); };
+  document.getElementById('registerBtn').onclick = onRegisterCandidates;
+  document.getElementById('copyBtn').onclick = () =>
+    copyText(document.getElementById('candidateText').value);
+  document.getElementById('memberSettingsBtn').onclick = openMemberDialog;
+  document.getElementById('closeMemberDialogBtn').onclick = closeMemberDialog;
+  document.getElementById('addMemberBtn').onclick = onAddMemberRow;
+  document.getElementById('saveMembersBtn').onclick = onSaveMembers;
+  document.getElementById('grid').addEventListener('click', onGridClick);
+}
+
+function moveWeek(days) {
+  state.weekStart = addDays(state.weekStart, days);
+  refresh();
+}
+
+/* ================= データ読み込み ================= */
+
+async function refresh() {
+  renderWeekLabel();
+  const startIso = state.weekStart.toISOString();
+  const endIso = addDays(state.weekStart, DAYS).toISOString();
+  const emails = state.selectedMembers.slice();
+  try {
+    const [events, fb, groups] = await Promise.all([
+      gas('getMyEvents', startIso, endIso),
+      emails.length
+        ? gas('getMembersFreeBusy', emails, startIso, endIso)
+        : Promise.resolve({ results: {} }),
+      gas('listCandidateGroups')
+    ]);
+    state.myEvents = events;
+    state.freeBusy = fb.results;
+    state.groups = groups;
+  } catch (e) {
+    showToast('読み込みエラー: ' + (e.message || e), true);
+  }
+  render();
+}
+
+/* ================= 描画 ================= */
+
+function render() {
+  renderMemberChips();
+  renderGrid();
+  renderCart();
+  renderGroups();
+}
+
+function renderWeekLabel() {
+  const s = state.weekStart, e = addDays(s, DAYS - 1);
+  document.getElementById('weekLabel').textContent =
+    s.getFullYear() + '/' + (s.getMonth() + 1) + '/' + s.getDate() +
+    ' 〜 ' + (e.getMonth() + 1) + '/' + e.getDate();
+}
+
+function renderMemberChips() {
+  const wrap = document.getElementById('memberChips');
+  wrap.innerHTML = '';
+  state.members.forEach(m => {
+    const chip = document.createElement('span');
+    const on = state.selectedMembers.includes(m.email);
+    const fb = state.freeBusy[m.email];
+    const noaccess = on && fb && fb.status === 'no_access';
+    chip.className = 'chip' + (on ? ' on' : '') + (noaccess ? ' noaccess' : '');
+    chip.textContent = (noaccess ? '⚠ ' : '') + m.label;
+    chip.title = m.email + (noaccess ? '(空き状況を取得できません)' : '');
+    chip.onclick = () => {
+      const i = state.selectedMembers.indexOf(m.email);
+      if (i >= 0) state.selectedMembers.splice(i, 1);
+      else state.selectedMembers.push(m.email);
+      refresh();
+    };
+    wrap.appendChild(chip);
+  });
+}
+
+function renderGrid() {
+  const days = [];
+  for (let i = 0; i < DAYS; i++) days.push(addDays(state.weekStart, i));
+  const todayKey = new Date().toDateString();
+  const now = new Date();
+
+  let html = '<table class="grid"><thead><tr><th></th>';
+  days.forEach(d => {
+    html += '<th class="' + (d.toDateString() === todayKey ? 'today' : '') + '">' + mdw(d) + '</th>';
+  });
+  html += '</tr></thead><tbody>';
+
+  const rows = (DAY_END - DAY_START) * 60 / SLOT_MIN;
+  for (let r = 0; r < rows; r++) {
+    const minutes = DAY_START * 60 + r * SLOT_MIN;
+    const isHour = minutes % 60 === 0;
+    html += '<tr>';
+    html += '<td class="time">' + (isHour ? pad2(Math.floor(minutes / 60)) + ':00' : '') + '</td>';
+    days.forEach(d => {
+      const cellStart = addMin(d, minutes);
+      const cellEnd = addMin(cellStart, SLOT_MIN);
+      const info = cellInfo(cellStart, cellEnd, now);
+      html += '<td class="slot ' + (isHour ? 'hourline ' : '') + info.classes +
+        '" data-start="' + cellStart.toISOString() + '"' +
+        (info.tip ? ' title="' + esc(info.tip) + '"' : '') + '></td>';
+    });
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById('grid').innerHTML = html;
+}
+
+function cellInfo(cellStart, cellEnd, now) {
+  const cs = cellStart.getTime(), ce = cellEnd.getTime();
+  const classes = [];
+  const tips = [];
+
+  state.myEvents.forEach(ev => {
+    if (ev.isAllDay) return;
+    if (overlaps(cs, ce, Date.parse(ev.start), Date.parse(ev.end))) {
+      classes.push(ev.isCandidate ? 'cand' : 'mine');
+      tips.push((ev.isCandidate ? '' : '自分: ') + ev.title);
+    }
+  });
+
+  state.members.forEach(m => {
+    const fb = state.freeBusy[m.email];
+    if (!fb || fb.status === 'no_access') return;
+    const hit = (fb.busy || []).some(b =>
+      overlaps(cs, ce, Date.parse(b.start), Date.parse(b.end)));
+    if (hit) {
+      classes.push('member-busy');
+      tips.push(m.label + ': 予定あり');
+    }
+  });
+
+  if (state.cart.some(s => overlaps(cs, ce, Date.parse(s.start), Date.parse(s.end)))) {
+    classes.push('selected');
+  }
+  if (ce <= now.getTime()) classes.push('past');
+
+  return { classes: [...new Set(classes)].join(' '), tip: tips.join('\n') };
+}
+
+/* ================= 候補カゴ ================= */
+
+function onGridClick(e) {
+  const td = e.target.closest('td.slot');
+  if (!td) return;
+  const cellStart = new Date(td.dataset.start);
+  const cellEnd = addMin(cellStart, SLOT_MIN);
+
+  // 選択済み候補のセルをクリック → その候補を解除
+  const hitIndex = state.cart.findIndex(s =>
+    overlaps(cellStart.getTime(), cellEnd.getTime(), Date.parse(s.start), Date.parse(s.end)));
+  if (hitIndex >= 0) {
+    state.cart.splice(hitIndex, 1);
+    render();
+    return;
+  }
+
+  const durationMin = Number(document.getElementById('durationSel').value);
+  const slotEnd = addMin(cellStart, durationMin);
+
+  const busyWithMine = state.myEvents.some(ev => !ev.isAllDay && !ev.isCandidate &&
+    overlaps(cellStart.getTime(), slotEnd.getTime(), Date.parse(ev.start), Date.parse(ev.end)));
+  const busyWithMembers = state.members.some(m => {
+    if (!state.selectedMembers.includes(m.email)) return false;
+    const fb = state.freeBusy[m.email];
+    return fb && fb.status !== 'no_access' && (fb.busy || []).some(b =>
+      overlaps(cellStart.getTime(), slotEnd.getTime(), Date.parse(b.start), Date.parse(b.end)));
+  });
+  if (busyWithMine || busyWithMembers) {
+    showToast('この時間帯には既存の予定と重なりがあります(候補には追加しました)', false);
+  }
+
+  state.cart.push({ start: cellStart.toISOString(), end: slotEnd.toISOString() });
+  state.cart.sort((a, b) => a.start.localeCompare(b.start));
+  render();
+}
+
+function renderCart() {
+  const ul = document.getElementById('cartList');
+  ul.innerHTML = '';
+  if (!state.cart.length) {
+    ul.innerHTML = '<li class="empty">グリッドをクリックして候補を追加してください</li>';
+  }
+  state.cart.forEach((s, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = '<span>' + esc(slotLabel(s)) + '</span>';
+    const rm = document.createElement('button');
+    rm.className = 'rm';
+    rm.textContent = '✕';
+    rm.onclick = () => { state.cart.splice(i, 1); render(); };
+    li.appendChild(rm);
+    ul.appendChild(li);
+  });
+  document.getElementById('registerBtn').disabled = !state.cart.length;
+
+  const inviteWrap = document.getElementById('inviteChecks');
+  inviteWrap.innerHTML = '';
+  if (!state.members.length) {
+    inviteWrap.innerHTML = '<span class="hint">メンバー未登録(ヘッダーの「設定」から登録)</span>';
+  }
+  state.members.forEach(m => {
+    const label = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = m.email;
+    cb.checked = state.selectedMembers.includes(m.email);
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(' ' + m.label));
+    inviteWrap.appendChild(label);
+  });
+}
+
+async function onRegisterCandidates() {
+  const title = document.getElementById('titleInput').value.trim();
+  if (!title) {
+    showToast('件名を入力してください', true);
+    return;
+  }
+  const invite = [...document.querySelectorAll('#inviteChecks input:checked')].map(cb => cb.value);
+  const btn = document.getElementById('registerBtn');
+  btn.disabled = true;
+  try {
+    const rec = await gas('createCandidateGroup', {
+      title: title,
+      slots: state.cart,
+      inviteOnConfirm: invite
+    });
+    state.lastGroupId = rec.groupId;
+    state.cart = [];
+    document.getElementById('titleInput').value = '';
+    const text = await gas('buildCandidateText', rec.groupId);
+    document.getElementById('candidateText').value = text;
+    document.getElementById('textPanel').hidden = false;
+    showToast('仮予定を ' + rec.slots.length + ' 件登録しました', false);
+    await refresh();
+  } catch (e) {
+    showToast('仮予定の登録に失敗: ' + (e.message || e), true);
+    btn.disabled = false;
+  }
+}
+
+/* ================= 候補セット一覧・確定 ================= */
+
+function renderGroups() {
+  const wrap = document.getElementById('groupList');
+  wrap.innerHTML = '';
+  if (!state.groups.length) {
+    wrap.innerHTML = '<div class="hint">候補セットはまだありません</div>';
+    return;
+  }
+  state.groups.forEach(g => {
+    const card = document.createElement('div');
+    card.className = 'group-card';
+
+    const pending = g.status === 'pending';
+    let html = '<h3>' + esc(g.title) +
+      '<span class="badge ' + (pending ? 'pending' : 'confirmed') + '">' +
+      (pending ? '調整中' : '確定済み') + '</span></h3>';
+    html += '<div class="meta">作成: ' + esc((g.createdAt || '').slice(0, 10)) +
+      (g.inviteOnConfirm && g.inviteOnConfirm.length
+        ? ' / 確定時招待: ' + g.inviteOnConfirm.length + '人' : '') + '</div>';
+    card.innerHTML = html;
+
+    g.slots.forEach(s => {
+      const row = document.createElement('div');
+      const isConfirmed = g.confirmedEventId === s.eventId;
+      row.className = 'group-slot' +
+        (s.deleted && !isConfirmed ? ' deleted' : '') +
+        (isConfirmed ? ' confirmed-slot' : '');
+      const label = document.createElement('span');
+      label.textContent = (isConfirmed ? '✔ ' : '') + slotLabel(s) +
+        (s.deleted && pending ? '(手動削除済)' : '');
+      row.appendChild(label);
+      if (pending && !s.deleted) {
+        const btn = document.createElement('button');
+        btn.textContent = 'この日で確定';
+        btn.onclick = () => onConfirm(g, s);
+        row.appendChild(btn);
+      }
+      card.appendChild(row);
+    });
+
+    const actions = document.createElement('div');
+    actions.className = 'group-actions';
+    if (pending) {
+      const copyBtn = document.createElement('button');
+      copyBtn.textContent = 'テキストをコピー';
+      copyBtn.onclick = async () => {
+        try {
+          copyText(await gas('buildCandidateText', g.groupId));
+        } catch (e) {
+          showToast('テキスト生成に失敗: ' + (e.message || e), true);
+        }
+      };
+      actions.appendChild(copyBtn);
+    }
+    const delBtn = document.createElement('button');
+    delBtn.textContent = pending ? '取り下げ' : '一覧から削除';
+    delBtn.onclick = () => onWithdraw(g);
+    actions.appendChild(delBtn);
+    card.appendChild(actions);
+
+    wrap.appendChild(card);
+  });
+}
+
+async function onConfirm(group, slot) {
+  const inviteN = (group.inviteOnConfirm || []).length;
+  let invite = false;
+  if (inviteN) {
+    invite = confirm('確定時にメンバー ' + inviteN + ' 人を招待しますか?\n' +
+      '(キャンセル = 招待せずに確定)');
+  }
+  if (!confirm('「' + group.title + '」を\n' + slotLabel(slot) +
+    ' で確定します。\n他の仮予定 ' + (group.slots.length - 1) + ' 件は削除されます。よろしいですか?')) {
+    return;
+  }
+  try {
+    const res = await gas('confirmCandidate', group.groupId, slot.eventId, { invite: invite });
+    let msg = '確定しました(仮予定 ' + res.deleted + ' 件を削除)';
+    if (res.warnings && res.warnings.length) msg += '\n注意: ' + res.warnings.join(' / ');
+    showToast(msg, false);
+    await refresh();
+  } catch (e) {
+    showToast('確定処理に失敗: ' + (e.message || e), true);
+  }
+}
+
+async function onWithdraw(group) {
+  const isPending = group.status === 'pending';
+  const msg = isPending
+    ? '「' + group.title + '」を取り下げます。仮予定は全て削除されます。よろしいですか?'
+    : '「' + group.title + '」を一覧から削除します(確定済みの予定は消えません)。よろしいですか?';
+  if (!confirm(msg)) return;
+  try {
+    await gas('deleteCandidateGroup', group.groupId);
+    showToast(isPending ? '取り下げました' : '一覧から削除しました', false);
+    await refresh();
+  } catch (e) {
+    showToast('削除に失敗: ' + (e.message || e), true);
+  }
+}
+
+/* ================= クリップボード(3段フォールバック) ================= */
+
+async function copyText(text) {
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('コピーしました', false);
+    return;
+  } catch (e) { /* HtmlServiceサンドボックスで失敗することがある */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    if (ok) {
+      showToast('コピーしました', false);
+      return;
+    }
+  } catch (e) { /* fallthrough */ }
+  // 最終手段: テキストエリアに表示して手動コピーしてもらう
+  document.getElementById('candidateText').value = text;
+  document.getElementById('textPanel').hidden = false;
+  document.getElementById('candidateText').select();
+  showToast('自動コピーできませんでした。表示されたテキストを手動でコピーしてください', true);
+}
+
+/* ================= メンバー設定 ================= */
+
+let editingMembers = [];
+
+function openMemberDialog() {
+  editingMembers = state.members.map(m => ({ email: m.email, label: m.label }));
+  renderMemberTable();
+  document.getElementById('memberDialog').classList.remove('hidden');
+}
+
+function closeMemberDialog() {
+  document.getElementById('memberDialog').classList.add('hidden');
+}
+
+function renderMemberTable() {
+  const tbody = document.querySelector('#memberTable tbody');
+  tbody.innerHTML = '';
+  editingMembers.forEach((m, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td>' + esc(m.email) + '</td><td>' + esc(m.label) + '</td>';
+    const td = document.createElement('td');
+    const rm = document.createElement('button');
+    rm.textContent = '削除';
+    rm.onclick = () => { editingMembers.splice(i, 1); renderMemberTable(); };
+    td.appendChild(rm);
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  });
+}
+
+function onAddMemberRow() {
+  const email = document.getElementById('newMemberEmail').value.trim();
+  const label = document.getElementById('newMemberLabel').value.trim();
+  if (!email || email.indexOf('@') < 1) {
+    showToast('メールアドレスを入力してください', true);
+    return;
+  }
+  editingMembers.push({ email: email, label: label || email.split('@')[0] });
+  document.getElementById('newMemberEmail').value = '';
+  document.getElementById('newMemberLabel').value = '';
+  renderMemberTable();
+}
+
+async function onSaveMembers() {
+  try {
+    const saved = await gas('saveMembers', editingMembers);
+    state.members = saved;
+    state.selectedMembers = saved.map(m => m.email);
+    closeMemberDialog();
+    showToast('メンバーを保存しました', false);
+    await refresh();
+  } catch (e) {
+    showToast('メンバー保存に失敗: ' + (e.message || e), true);
+  }
+}
+
+/* ================= 起動 ================= */
+
+init();
+</script>

@@ -1,0 +1,88 @@
+<?!= include('style'); ?>
+
+<div id="toast" class="hidden"></div>
+
+<header id="topbar">
+  <div class="nav">
+    <button id="prevWeek" type="button">◀ 前週</button>
+    <button id="todayBtn" type="button">今週</button>
+    <button id="nextWeek" type="button">翌週 ▶</button>
+    <span id="weekLabel"></span>
+  </div>
+  <div class="members">
+    <span class="members-label">メンバー:</span>
+    <span id="memberChips"></span>
+    <button id="memberSettingsBtn" type="button">設定</button>
+  </div>
+  <div class="user"><span id="userEmail"></span></div>
+</header>
+
+<main id="layout">
+  <section id="gridWrap">
+    <div id="legend">
+      <span><i class="lg lg-mine"></i>自分の予定</span>
+      <span><i class="lg lg-cand"></i>仮予定(候補)</span>
+      <span><i class="lg lg-member"></i>メンバー予定あり</span>
+      <span><i class="lg lg-sel"></i>選択中の候補</span>
+    </div>
+    <div id="grid"></div>
+  </section>
+
+  <aside id="sidebar">
+    <section class="panel" id="cartPanel">
+      <h2>候補カゴ</h2>
+      <div class="field">
+        <label for="durationSel">所要時間</label>
+        <select id="durationSel">
+          <option value="30">30分</option>
+          <option value="60" selected>60分</option>
+          <option value="90">90分</option>
+        </select>
+        <span class="hint">グリッドの空きセルをクリックで候補追加</span>
+      </div>
+      <ul id="cartList" class="slot-list"></ul>
+      <div class="field">
+        <label for="titleInput">件名</label>
+        <input id="titleInput" type="text" placeholder="例: ○○社 お打合せ" />
+      </div>
+      <div class="field" id="inviteField">
+        <label>確定時に招待するメンバー</label>
+        <div id="inviteChecks"></div>
+      </div>
+      <button id="registerBtn" type="button" class="primary" disabled>仮予定として登録</button>
+    </section>
+
+    <section class="panel" id="textPanel" hidden>
+      <h2>相手に送るテキスト</h2>
+      <textarea id="candidateText" rows="5" readonly></textarea>
+      <button id="copyBtn" type="button">コピー</button>
+    </section>
+
+    <section class="panel" id="groupsPanel">
+      <h2>候補セット一覧</h2>
+      <div id="groupList"></div>
+    </section>
+  </aside>
+</main>
+
+<div id="memberDialog" class="modal hidden">
+  <div class="modal-body">
+    <h2>メンバー設定</h2>
+    <p class="hint">空き状況を確認したい社内メンバーを登録します。</p>
+    <table id="memberTable">
+      <thead><tr><th>メールアドレス</th><th>表示名</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="member-add">
+      <input id="newMemberEmail" type="email" placeholder="taro@example.com" />
+      <input id="newMemberLabel" type="text" placeholder="表示名(例: 田中)" />
+      <button id="addMemberBtn" type="button">追加</button>
+    </div>
+    <div class="modal-actions">
+      <button id="saveMembersBtn" type="button" class="primary">保存</button>
+      <button id="closeMemberDialogBtn" type="button">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<?!= include('app-js'); ?>
