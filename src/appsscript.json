@@ -3,11 +3,6 @@
   "dependencies": {},
   "exceptionLogging": "STACKDRIVER",
   "runtimeVersion": "V8",
-  "oauthScopes": [
-    "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/script.external_request",
-    "https://www.googleapis.com/auth/userinfo.email"
-  ],
   "webapp": {
     "access": "MYSELF",
     "executeAs": "USER_DEPLOYING"
