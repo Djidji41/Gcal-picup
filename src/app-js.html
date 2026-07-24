@@ -41,7 +41,13 @@ function hhmm(d) { return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
 function mdw(d) { return (d.getMonth() + 1) + '/' + d.getDate() + '(' + YOUBI[d.getDay()] + ')'; }
 function slotLabel(s) {
   const st = new Date(s.start), en = new Date(s.end);
-  return mdw(st) + ' ' + hhmm(st) + '〜' + hhmm(en);
+  return mdw(st) + ' ' + hhmm(st) + '〜' + hhmm(en) +
+    (s.bufferMin ? '(移動±' + s.bufferMin + '分)' : '');
+}
+// 移動バッファ込みでカレンダー上に確保される時間帯(ms)
+function blockedRange(s) {
+  const b = (s.bufferMin || 0) * 60000;
+  return { start: Date.parse(s.start) - b, end: Date.parse(s.end) + b };
 }
 function overlaps(aS, aE, bS, bE) { return aS < bE && bS < aE; }
 function esc(s) {
@@ -213,8 +219,16 @@ function cellInfo(cellStart, cellEnd, now) {
     }
   });
 
-  if (state.cart.some(s => overlaps(cs, ce, Date.parse(s.start), Date.parse(s.end)))) {
+  const inMeeting = state.cart.some(s =>
+    overlaps(cs, ce, Date.parse(s.start), Date.parse(s.end)));
+  if (inMeeting) {
     classes.push('selected');
+  } else if (state.cart.some(s => {
+    const b = blockedRange(s);
+    return overlaps(cs, ce, b.start, b.end);
+  })) {
+    classes.push('selected-buffer');
+    tips.push('移動時間として確保');
   }
   if (ce <= now.getTime()) classes.push('past');
 
@@ -229,9 +243,11 @@ function onGridClick(e) {
   const cellStart = new Date(td.dataset.start);
   const cellEnd = addMin(cellStart, SLOT_MIN);
 
-  // 選択済み候補のセルをクリック → その候補を解除
-  const hitIndex = state.cart.findIndex(s =>
-    overlaps(cellStart.getTime(), cellEnd.getTime(), Date.parse(s.start), Date.parse(s.end)));
+  // 選択済み候補のセル(移動バッファ含む)をクリック → その候補を解除
+  const hitIndex = state.cart.findIndex(s => {
+    const b = blockedRange(s);
+    return overlaps(cellStart.getTime(), cellEnd.getTime(), b.start, b.end);
+  });
   if (hitIndex >= 0) {
     state.cart.splice(hitIndex, 1);
     render();
@@ -239,21 +255,29 @@ function onGridClick(e) {
   }
 
   const durationMin = Number(document.getElementById('durationSel').value);
+  const bufferMin = Number(document.getElementById('bufferSel').value) || 0;
   const slotEnd = addMin(cellStart, durationMin);
+  const newSlot = {
+    start: cellStart.toISOString(),
+    end: slotEnd.toISOString(),
+    bufferMin: bufferMin
+  };
+  // 重なり判定は移動込みの確保枠で行う
+  const blocked = blockedRange(newSlot);
 
   const busyWithMine = state.myEvents.some(ev => !ev.isAllDay && !ev.isCandidate &&
-    overlaps(cellStart.getTime(), slotEnd.getTime(), Date.parse(ev.start), Date.parse(ev.end)));
+    overlaps(blocked.start, blocked.end, Date.parse(ev.start), Date.parse(ev.end)));
   const busyWithMembers = state.members.some(m => {
     if (!state.selectedMembers.includes(m.email)) return false;
     const fb = state.freeBusy[m.email];
     return fb && fb.status !== 'no_access' && (fb.busy || []).some(b =>
-      overlaps(cellStart.getTime(), slotEnd.getTime(), Date.parse(b.start), Date.parse(b.end)));
+      overlaps(blocked.start, blocked.end, Date.parse(b.start), Date.parse(b.end)));
   });
   if (busyWithMine || busyWithMembers) {
-    showToast('この時間帯には既存の予定と重なりがあります(候補には追加しました)', false);
+    showToast('この時間帯(移動時間含む)には既存の予定と重なりがあります(候補には追加しました)', false);
   }
 
-  state.cart.push({ start: cellStart.toISOString(), end: slotEnd.toISOString() });
+  state.cart.push(newSlot);
   state.cart.sort((a, b) => a.start.localeCompare(b.start));
   render();
 }

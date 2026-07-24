@@ -30,10 +30,16 @@ function createCandidateGroup(payload) {
   const warnings = [];
 
   const saved = slots.map(function (s, i) {
+    // 移動バッファ付きの候補は、カレンダー上の枠を前後に広げて確保する。
+    // 台帳の start/end は打合せ時間のまま保持し、送付テキストにはそちらを使う。
+    const bufferMin = Math.max(0, Number(s.bufferMin) || 0);
+    const evStart = new Date(new Date(s.start).getTime() - bufferMin * 60000);
+    const evEnd = new Date(new Date(s.end).getTime() + bufferMin * 60000);
     const ev = cal.createEvent(
-      TENTATIVE_PREFIX + title + ' (' + (i + 1) + '/' + n + ')',
-      new Date(s.start),
-      new Date(s.end)
+      TENTATIVE_PREFIX + title + ' (' + (i + 1) + '/' + n + ')' +
+        (bufferMin ? '【移動±' + bufferMin + '分込】' : ''),
+      evStart,
+      evEnd
     );
     ev.setTag(TAG_GROUP_ID, groupId);
     try {
@@ -50,7 +56,7 @@ function createCandidateGroup(payload) {
         }
       });
     }
-    return { eventId: ev.getId(), start: s.start, end: s.end };
+    return { eventId: ev.getId(), start: s.start, end: s.end, bufferMin: bufferMin };
   });
 
   const record = {
@@ -134,7 +140,14 @@ function confirmCandidate(groupId, confirmedEventId, options) {
   });
 
   const finalTitle = String(options.finalTitle || rec.title).trim() || rec.title;
-  confirmedEv.setTitle(finalTitle);
+  const confirmedSlot = rec.slots.filter(function (s) {
+    return s.eventId === confirmedEventId;
+  })[0] || {};
+  // 移動バッファ付きの枠は、確定後もタイトルで移動込みと分かるようにする
+  const bufferNote = confirmedSlot.bufferMin
+    ? '【移動±' + confirmedSlot.bufferMin + '分込】'
+    : '';
+  confirmedEv.setTitle(finalTitle + bufferNote);
 
   // 仮予定の段階で招待済みなら確定イベントには既にゲストが載っている。
   // 他候補の削除でゲスト側カレンダーからも自動的に消えるため、追加処理は不要。

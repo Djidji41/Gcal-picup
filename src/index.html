@@ -37,8 +37,19 @@
           <option value="30">30分</option>
           <option value="60" selected>60分</option>
           <option value="90">90分</option>
+          <option value="120">120分</option>
         </select>
-        <span class="hint">グリッドの空きセルをクリックで候補追加</span>
+        <span class="hint">グリッドの空きセルをクリックで候補追加(クリック位置=打合せ開始時刻)</span>
+      </div>
+      <div class="field">
+        <label for="bufferSel">前後の移動時間(訪問用)</label>
+        <select id="bufferSel">
+          <option value="0" selected>なし</option>
+          <option value="30">前後30分</option>
+          <option value="60">前後60分</option>
+          <option value="90">前後90分</option>
+        </select>
+        <span class="hint">仮予定は移動込みの枠で確保し、相手に送るテキストは打合せ時間のみになります</span>
       </div>
       <ul id="cartList" class="slot-list"></ul>
       <div class="field">
