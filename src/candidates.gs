@@ -25,6 +25,9 @@ function createCandidateGroup(payload) {
   const groupId = Utilities.getUuid();
   const cal = CalendarApp.getDefaultCalendar();
   const n = slots.length;
+  const inviteList = (payload && payload.inviteOnConfirm) || [];
+  const inviteAtTentative = !!(payload && payload.inviteAtTentative) && inviteList.length > 0;
+  const warnings = [];
 
   const saved = slots.map(function (s, i) {
     const ev = cal.createEvent(
@@ -38,6 +41,15 @@ function createCandidateGroup(payload) {
     } catch (e) {
       // 色設定に失敗しても本質機能には影響しない
     }
+    if (inviteAtTentative) {
+      inviteList.forEach(function (email) {
+        try {
+          ev.addGuest(email);
+        } catch (e) {
+          warnings.push('招待に失敗: ' + email + ' (' + (i + 1) + '/' + n + ')');
+        }
+      });
+    }
     return { eventId: ev.getId(), start: s.start, end: s.end };
   });
 
@@ -46,12 +58,14 @@ function createCandidateGroup(payload) {
     title: title,
     memo: String((payload && payload.memo) || ''),
     createdAt: new Date().toISOString(),
-    inviteOnConfirm: (payload && payload.inviteOnConfirm) || [],
+    inviteOnConfirm: inviteList,
+    inviteAtTentative: inviteAtTentative,
     slots: saved,
     status: 'pending'
   };
   PropertiesService.getUserProperties()
     .setProperty(GROUP_KEY_PREFIX + groupId, JSON.stringify(record));
+  record.warnings = warnings;
   return record;
 }
 
@@ -122,7 +136,9 @@ function confirmCandidate(groupId, confirmedEventId, options) {
   const finalTitle = String(options.finalTitle || rec.title).trim() || rec.title;
   confirmedEv.setTitle(finalTitle);
 
-  if (options.invite && rec.inviteOnConfirm && rec.inviteOnConfirm.length) {
+  // 仮予定の段階で招待済みなら確定イベントには既にゲストが載っている。
+  // 他候補の削除でゲスト側カレンダーからも自動的に消えるため、追加処理は不要。
+  if (options.invite && !rec.inviteAtTentative && rec.inviteOnConfirm && rec.inviteOnConfirm.length) {
     rec.inviteOnConfirm.forEach(function (email) {
       try {
         confirmedEv.addGuest(email);

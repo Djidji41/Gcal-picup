@@ -46,8 +46,12 @@
         <input id="titleInput" type="text" placeholder="例: ○○社 お打合せ" />
       </div>
       <div class="field" id="inviteField">
-        <label>確定時に招待するメンバー</label>
+        <label>招待するメンバー</label>
         <div id="inviteChecks"></div>
+      </div>
+      <div class="field">
+        <label><input id="inviteAtTentative" type="checkbox" /> 仮予定の段階でメンバーの枠も確保する</label>
+        <span class="hint">ON: 候補全部がメンバーのカレンダーにも入ります(候補の数だけ招待通知が届きます)。OFF: 確定時にのみ招待します。</span>
       </div>
       <button id="registerBtn" type="button" class="primary" disabled>仮予定として登録</button>
     </section>

@@ -300,14 +300,25 @@ async function onRegisterCandidates() {
     return;
   }
   const invite = [...document.querySelectorAll('#inviteChecks input:checked')].map(cb => cb.value);
+  const inviteAtTentative = document.getElementById('inviteAtTentative').checked;
+  if (inviteAtTentative && invite.length) {
+    const ok = confirm('仮予定の段階でメンバー ' + invite.length + ' 人の枠を確保します。\n' +
+      '候補 ' + state.cart.length + ' 件すべてがメンバーのカレンダーに登録され、' +
+      'それぞれ招待通知が届きます。よろしいですか?');
+    if (!ok) return;
+  }
   const btn = document.getElementById('registerBtn');
   btn.disabled = true;
   try {
     const rec = await gas('createCandidateGroup', {
       title: title,
       slots: state.cart,
-      inviteOnConfirm: invite
+      inviteOnConfirm: invite,
+      inviteAtTentative: inviteAtTentative
     });
+    if (rec.warnings && rec.warnings.length) {
+      showToast('注意: ' + rec.warnings.join(' / '), true);
+    }
     state.lastGroupId = rec.groupId;
     state.cart = [];
     document.getElementById('titleInput').value = '';
@@ -341,7 +352,10 @@ function renderGroups() {
       (pending ? '調整中' : '確定済み') + '</span></h3>';
     html += '<div class="meta">作成: ' + esc((g.createdAt || '').slice(0, 10)) +
       (g.inviteOnConfirm && g.inviteOnConfirm.length
-        ? ' / 確定時招待: ' + g.inviteOnConfirm.length + '人' : '') + '</div>';
+        ? (g.inviteAtTentative
+            ? ' / 仮段階で招待済み: ' + g.inviteOnConfirm.length + '人'
+            : ' / 確定時招待: ' + g.inviteOnConfirm.length + '人')
+        : '') + '</div>';
     card.innerHTML = html;
 
     g.slots.forEach(s => {
@@ -390,7 +404,7 @@ function renderGroups() {
 async function onConfirm(group, slot) {
   const inviteN = (group.inviteOnConfirm || []).length;
   let invite = false;
-  if (inviteN) {
+  if (inviteN && !group.inviteAtTentative) {
     invite = confirm('確定時にメンバー ' + inviteN + ' 人を招待しますか?\n' +
       '(キャンセル = 招待せずに確定)');
   }
