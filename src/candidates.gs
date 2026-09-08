@@ -131,8 +131,7 @@ function confirmCandidate(groupId, confirmedEventId, options) {
   rec.slots.forEach(function (s) {
     if (s.eventId === confirmedEventId) return;
     const ev = safeGetEvent_(cal, s.eventId);
-    if (ev) {
-      ev.deleteEvent();
+    if (ev && safeDeleteEvent_(ev)) {
       deleted++;
     } else {
       warnings.push(formatSlot_(new Date(s.start), new Date(s.end)) + ' は既に削除されていました');
@@ -185,10 +184,7 @@ function deleteCandidateGroup(groupId) {
   if (rec.status !== 'confirmed') {
     rec.slots.forEach(function (s) {
       const ev = safeGetEvent_(cal, s.eventId);
-      if (ev) {
-        ev.deleteEvent();
-        deleted++;
-      }
+      if (ev && safeDeleteEvent_(ev)) deleted++;
     });
   }
   props.deleteProperty(key);
@@ -215,6 +211,20 @@ function safeGetEvent_(cal, eventId) {
     return cal.getEventById(eventId); // 手動削除済みなら null
   } catch (e) {
     return null;
+  }
+}
+
+/**
+ * イベント削除の安全版。カレンダーUIで手動削除(ゴミ箱行き)済みのイベントは
+ * getEventById がオブジェクトを返すのに deleteEvent() が例外を投げることがあるため、
+ * 失敗しても処理全体を止めない。
+ */
+function safeDeleteEvent_(ev) {
+  try {
+    ev.deleteEvent();
+    return true;
+  } catch (e) {
+    return false;
   }
 }
 
